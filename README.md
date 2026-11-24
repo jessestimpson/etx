@@ -131,6 +131,22 @@ etx has no benchmark in this repository.
 | Unit tests | 13 tests. Random functions on a table of etx and on an ETS table give the same results. Transactions from several processes lose no update. A cluster of three Erlang nodes | `make test` |
 | Simulation | 13 tests with about 550 seeds. Three nodes under the scheduler, the network and the disk of [eta](https://github.com/jessestimpson/eta), with kills and restarts of nodes and partitions. 7 invariants and 6 planted defects | `make dst` |
 
+The verification of etx depends on the verification of
+[redwall](https://github.com/jessestimpson/redwall):
+
+- A function of etx is a transaction of redwall. The function has strict
+  serializability only if a transaction of redwall has it.
+- The tests of etx check the functions for tables, and a cluster of
+  three nodes with kills and partitions. They do not repeat the
+  verification of the transaction system: the models, the invariants of
+  the simulation and the planted defects of redwall.
+- redwall depends on [peace](https://github.com/jessestimpson/peace) in
+  the same way, for the coordinated state.
+
+The dependencies form a sequence: etx depends on redwall, and redwall
+depends on peace. A result of a higher level holds only if the
+verification of each level below it holds.
+
 GitHub Actions runs both on each push to `main` and on each pull
 request. See [docs/verification.md](docs/verification.md).
 

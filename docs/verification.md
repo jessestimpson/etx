@@ -1,5 +1,23 @@
 # Verification
 
+## Dependencies
+
+The verification of etx depends on the verification of
+[redwall](https://github.com/jessestimpson/redwall):
+
+- A function of etx is a transaction of redwall. The function has strict
+  serializability only if a transaction of redwall has it.
+- The tests of etx check the functions for tables, and a cluster of
+  three nodes with kills and partitions. They do not repeat the
+  verification of the transaction system: the models, the invariants of
+  the simulation and the planted defects of redwall.
+- redwall depends on [peace](https://github.com/jessestimpson/peace) in
+  the same way, for the coordinated state.
+
+The dependencies form a sequence: etx depends on redwall, and redwall
+depends on peace. A result of a higher level holds only if the
+verification of each level below it holds.
+
 ## Unit tests
 
 `make test` runs 13 tests. Results on 2026-11-24, with Erlang/OTP 28:

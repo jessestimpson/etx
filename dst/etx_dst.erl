@@ -56,8 +56,7 @@
 %% memory, and each record is on 2 LogServers of its epoch, on 2 nodes.
 %% After kills of two different nodes, also with a restart in between, a
 %% record of an earlier epoch can be on no LogServer. A StorageServer that
-%% starts after that cannot read the record. See "Limitations" in
-%% README.md.
+%% starts after that cannot read the record. See `docs/limitations.md'.
 %%
 %% With the config `rolling => true', the victim changes after each
 %% restart, so a run kills two or three different nodes, one at a time.

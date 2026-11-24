@@ -1,7 +1,9 @@
 # etx
 
+[![CI](https://github.com/jessestimpson/etx/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jessestimpson/etx/actions/workflows/ci.yml)
+
 etx (Erlang Term Transactions) is an Erlang application that gives
-[redwall](../redwall) the interface of `ets`. A table of etx has the
+[redwall](https://github.com/jessestimpson/redwall) the interface of `ets`. A table of etx has the
 functions of an ETS table of the type `ordered_set`. The table is in a
 cluster of redwall, so every node of the cluster has the same table, and
 each function is a transaction with strict serializability.
@@ -382,9 +384,20 @@ Limitations of the simulation:
   cannot change.
 - etx has no benchmark. redwall has one for the transactions that etx
   uses.
-- The dependency on redwall is the SSH address
-  `git@github.com:jessestimpson/redwall.git`. A build without a checkout
-  of redwall needs an SSH key with access to that repository.
+
+## Continuous integration
+
+GitHub Actions runs the workflow [CI](.github/workflows/ci.yml) on each
+push to `main` and on each pull request, with Erlang/OTP 28.3 on
+`ubuntu-latest`.
+
+| Job | Command |
+|---|---|
+| Unit tests | `make compile`, `make test` |
+| Deterministic simulation | `dst/run.sh -j N`, with N the number of processors of the runner |
+
+- The workflow builds with redwall, peace and eta from the branch `main`
+  of their repositories.
 
 ## Commands
 
@@ -398,7 +411,7 @@ Limitations of the simulation:
 
 - Erlang/OTP 28
 - rebar3
-- redwall, from `git@github.com:jessestimpson/redwall.git`, branch
+- redwall, from `https://github.com/jessestimpson/redwall.git`, branch
   `main`
 - peace, from `https://github.com/jessestimpson/peace.git`, branch `main`
 - eta, from `https://github.com/jessestimpson/eta.git`, branch `main`,

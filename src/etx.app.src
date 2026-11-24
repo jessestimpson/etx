@@ -1,0 +1,16 @@
+{application, etx, [
+    {description, "Erlang Term Transactions: tables with the interface of ets on redwall"},
+    {vsn, "0.1.0"},
+    {registered, [etx_sup]},
+    {mod, {etx_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        peace,
+        redwall
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.

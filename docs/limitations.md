@@ -30,8 +30,6 @@
   without an end.
 - In a cluster of one node, every LogServer is on that node.
 - The types `bag` and `duplicate_bag` are not supported.
-- `last/1` and `prev/2` read every key of the table below the result,
-  because redwall has no read in the reverse order.
 - `info/2` with `size` counts the objects in the StorageServer.
 - A `select/3` with a limit and its `select/1` are several transactions
   if the handle is not bound to a transaction.

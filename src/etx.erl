@@ -79,8 +79,6 @@
 %%   if the option `keypos' is not the `keypos' of the table.</li>
 %% <li>The options of ets for access, heir, concurrency and compression
 %%   are ignored.</li>
-%% <li>`last/1' and `prev/2' read every key of the table below the result,
-%%   because redwall has no read in the reverse order.</li>
 %% <li>`info/2' with `size' counts the objects in the StorageServer.</li>
 %% <li>A `select/3' with a limit and its `select/1' are several
 %%   transactions if the handle is not bound to a transaction. They do not
@@ -332,18 +330,23 @@ next(T, Key) ->
     Spec = keys([{'>', '$1', {const, Key}}]),
     run(T, fun(Tx) -> end_of_table(redwall:select(Tx, key(T, Key), End, Spec, [{limit, 1}])) end).
 
-%% @doc Returns the last key. The function reads every key of the table.
+%% @doc Returns the last key. The function reads one key in the reverse
+%% order (`redwall:get_range/4' with `reverse' and a limit of 1).
 -spec last(table()) -> term() | '$end_of_table'.
 last(T) ->
     {Begin, End} = bounds(T),
-    run(T, fun(Tx) -> end_of_table(lists:reverse(redwall:select(Tx, Begin, End, keys([])))) end).
+    run(T, fun(Tx) -> last_key(redwall:get_range(Tx, Begin, End, [{reverse, true}, {limit, 1}])) end).
 
-%% @doc Returns the key before `Key'. The function reads every key of the
-%% table below `Key'.
+%% @doc Returns the key before `Key'. The function reads one key in the
+%% reverse order.
 -spec prev(table(), term()) -> term() | '$end_of_table'.
 prev(T, Key) ->
     {Begin, _End} = bounds(T),
-    run(T, fun(Tx) -> end_of_table(lists:reverse(redwall:select(Tx, Begin, key(T, Key), keys([])))) end).
+    run(T, fun(Tx) -> last_key(redwall:get_range(Tx, Begin, key(T, Key), [{reverse, true}, {limit, 1}])) end).
+
+%% The key of the object of the one row of a read in the reverse order.
+last_key([{[etx, _Name, Key], _Object}]) -> Key;
+last_key([]) -> '$end_of_table'.
 
 end_of_table([Key | _]) -> Key;
 end_of_table([]) -> '$end_of_table'.

@@ -195,15 +195,19 @@ the functions of `ets` that are missing.
 
 - Erlang/OTP 28
 - rebar3
-- redwall, from `https://github.com/jessestimpson/redwall.git`, branch
-  `main`
-- peace, from `https://github.com/jessestimpson/peace.git`, branch `main`
-- eta, from `https://github.com/jessestimpson/eta.git`, branch `main`,
-  for `make dst`
+- redwall, from `https://github.com/jessestimpson/redwall.git`, at the
+  commit that `rebar.lock` records
+- peace, from `https://github.com/jessestimpson/peace.git`, at the commit
+  that `rebar.lock` records
+- eta, from `https://github.com/jessestimpson/eta.git`, for `make dst`, at
+  the commit that the `dst` profile of `rebar.config` fixes. `rebar.lock`
+  does not hold the dependencies of a profile.
 
-rebar3 fetches the three applications. For local development, a link at
-`_checkouts/redwall`, `_checkouts/peace` or `_checkouts/eta` replaces the
-fetched application with a local checkout.
+rebar3 fetches the three applications. `rebar3 upgrade redwall` or
+`rebar3 upgrade peace` moves the lock to the newest commit of the branch
+`main`. For local development, a link at `_checkouts/redwall`,
+`_checkouts/peace` or `_checkouts/eta` replaces the fetched application
+with a local checkout.
 
 ## Source layout
 

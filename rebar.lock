@@ -1,1 +1,8 @@
-[].
+[{<<"peace">>,
+  {git,"https://github.com/jessestimpson/peace.git",
+       {ref,"27f4e26c4d8b7f801e544637c3b552ef6d1de636"}},
+  0},
+ {<<"redwall">>,
+  {git,"https://github.com/jessestimpson/redwall.git",
+       {ref,"fbe01ba16c069960fb0b195a8e834cf0271e3c8d"}},
+  0}].

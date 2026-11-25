@@ -19,8 +19,16 @@ etx_test_() ->
         {timeout, 60, fun restart/0}
     ]}.
 
+%% An empty directory for the data of one cluster.
+%%
+%% `erlang:unique_integer/1' starts from the same values in every Erlang
+%% node, so a later run of the tests gets the name of a directory of an
+%% earlier run, with the coordinated state of that run. The function
+%% therefore deletes a directory of an earlier run.
 dir() ->
-    filename:join([filename:basedir(user_cache, "etx_test"), integer_to_list(erlang:unique_integer([positive]))]).
+    Dir = filename:join([filename:basedir(user_cache, "etx_test"), integer_to_list(erlang:unique_integer([positive]))]),
+    _ = file:del_dir_r(Dir),
+    Dir.
 
 setup() ->
     _ = application:load(etx),

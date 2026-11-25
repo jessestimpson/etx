@@ -22,6 +22,10 @@ three_nodes() ->
     [{P1, _N1}, {P2, _N2}, {P3, N3}] = Peers,
     Coordinators = [{etx_test_coordinator, Node} || {_Peer, Node} <- Peers],
     Base = filename:join([filename:basedir(user_cache, "etx_test"), "nodes", integer_to_list(erlang:unique_integer([positive]))]),
+    %% A later run of the tests gets the same name, because
+    %% `erlang:unique_integer/1' starts from the same values in every
+    %% Erlang node. A directory of an earlier run is deleted.
+    _ = file:del_dir_r(Base),
     try
         lists:foreach(
             fun({Peer, Node}) ->
@@ -120,6 +124,9 @@ full_restart() ->
     Tag = integer_to_list(erlang:unique_integer([positive])),
     Names = [list_to_atom(lists:concat([etx_restart_, Tag, "_", N])) || N <- [1, 2, 3]],
     Base = filename:join([filename:basedir(user_cache, "etx_test"), "restart", Tag]),
+    %% A directory of an earlier run has the coordinated state of that
+    %% run. See `three_nodes/0'.
+    _ = file:del_dir_r(Base),
     Start = fun() ->
         Peers = [
             begin

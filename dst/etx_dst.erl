@@ -101,6 +101,35 @@
 %% without the question of step 2. The cluster can then lose 2 LogServers
 %% of one epoch.
 %%
+%% == A start on a cluster without commits ==
+%%
+%% With the config `idle => true', the end of a run has a node that starts
+%% on a cluster without commits:
+%%
+%% <ol>
+%% <li>After the last operation, the harness removes every cut and stops
+%%   the loss of messages. It does not start the killed nodes. If no node
+%%   is killed, and the run has neither the config `rolling' nor the
+%%   config `alone', the harness kills the victim.</li>
+%% <li>The last client of each node that runs counts, writes and reads
+%%   (`etx_dst_client:final/2').</li>
+%% <li>When these clients have ended, or after 3,000 ms, each killed node
+%%   waits for 1,000 ms and starts etx. No client runs in that time or
+%%   after it, so the cluster has no commit.</li>
+%% <li>A process on each node waits until `etx:status/0' reports the
+%%   StorageServer of its node as current. It then reads through the
+%%   StorageServer of its node only, and through the StorageServers by
+%%   message only. It records the time since the start of the last killed
+%%   node. None of these steps commits.</li>
+%% <li>When every node has recorded that time, the last client of each
+%%   node that was killed counts, writes and reads.</li>
+%% </ol>
+%%
+%% `check_final/2' also checks `idle_convergence': each node recorded the
+%% time of step 4, and the time is at most 5,000 ms of the virtual clock.
+%% A part of the system that makes progress only with the next commit, or
+%% only after a long time limit, violates it.
+%%
 %% == Invariants ==
 %%
 %% The harness checks these invariants after every step:
@@ -161,6 +190,12 @@
 %%   `reset_after_log_loss => false'. With the config `restart_at', the
 %%   cluster has no epoch after the restart of every node, and a run ends
 %%   with nodes that do not answer.</li>
+%% <li>`no_epoch_end' - a StorageServer does not treat the end version of
+%%   an ended epoch as committed. With the configs `alone' and `idle', a
+%%   StorageServer that starts on a cluster without commits copies the
+%%   data at a version of an epoch whose LogServers do not run, and stays
+%%   behind. A run ends with nodes whose StorageServers are not
+%%   current.</li>
 %% <li>`no_idempotency' - the cluster has the option
 %%   `automatic_idempotency => false'. When the process of an epoch stops
 %%   after a commit is durable and before the client has the answer, the
@@ -191,6 +226,12 @@
 
 -define(STATS, etx_dst_stats).
 -define(NODES, [n1, n2, n3]).
+%% The highest time of convergence of a node in a run with the config
+%% `idle', in milliseconds of the virtual clock.
+-define(IDLE_BOUND_MS, 5000).
+%% The number of the last operation with a client in a run with the
+%% configs `alone' and `idle'.
+-define(ALONE_QUIET_OP, 60).
 
 %% ---------------------------------------------------------------------------
 %% eta_harness
@@ -212,7 +253,9 @@ init(Seed, Config) ->
             %% The planted defect `no_copy'.
             storage_copy => maps:get(mode, Config, correct) =/= no_copy,
             %% The planted defect `no_reset'.
-            reset_after_log_loss => maps:get(mode, Config, correct) =/= no_reset
+            reset_after_log_loss => maps:get(mode, Config, correct) =/= no_reset,
+            %% The planted defect `no_epoch_end'.
+            committed_at_epoch_end => maps:get(mode, Config, correct) =/= no_epoch_end
         }
     }),
     [ok = eta_net:place(Node, []) || Node <- ?NODES],
@@ -228,6 +271,9 @@ init(Seed, Config) ->
         %% that the run kills, in the order of the kills. `alone_first'
         %% is the node that starts again first.
         alone => maps:get(alone, Config, false),
+        %% Whether the end of the run has a start of a node on a cluster
+        %% without commits. See "A start on a cluster without commits".
+        idle => maps:get(idle, Config, false),
         alone_order => lists:nth(Seed rem 6 + 1, [[A, B, C] || A <- ?NODES, B <- ?NODES, C <- ?NODES, A =/= B, B =/= C, A =/= C]),
         alone_first => Seed div 6 rem 2 + 1,
         %% The number of the operation that stops every node and starts
@@ -322,13 +368,21 @@ execute(boot, _N, S = #{tab := Tab}) ->
     %% The client that creates the table runs on a node that the run
     %% does not kill.
     spawn_op(hd(?NODES -- [maps:get(victim, S)]), fun() -> etx_dst_client:setup(Tab) end, S1);
-execute({client, R1, R2}, N, S = #{tab := Tab, mode := Mode}) ->
-    %% A client runs on a node that is not killed.
-    Node = pick(R1, running(S)),
-    bump(clients),
-    spawn_op(Node, fun() -> client(Tab, N, R2, Mode) end, S);
-execute(kill, _N, S = #{tab := Tab, alone := true, alone_order := [First, Second, Third], mode := Mode}) ->
+execute({client, R1, R2}, N, S = #{tab := Tab, mode := Mode, alone := Alone, idle := Idle}) ->
+    %% With the configs `alone' and `idle', no client starts after the
+    %% operation `?ALONE_QUIET_OP'. The first node is killed when no
+    %% client runs, so the epoch between the two kills has no commit of
+    %% a client, and the two nodes start again on a cluster without
+    %% commits.
+    Quiet = Alone andalso Idle andalso N > ?ALONE_QUIET_OP,
+    execute_client(Quiet, R1, R2, N, Tab, Mode, S);
+execute(kill, N, S = #{tab := Tab, alone := true, alone_order := [First, Second, Third], mode := Mode, idle := Idle}) ->
+    %% With the config `idle', the first kill waits until no client
+    %% runs.
+    Busy = Idle andalso (N =< ?ALONE_QUIET_OP orelse lists:sum([Active || [Active] <- ets:match(Tab, {{active, '_'}, '$1'})]) > 0),
     case {ets:member(Tab, ready), ets:lookup(Tab, alone_step)} of
+        {true, []} when Busy ->
+            S;
         {true, []} ->
             %% The first kill, with the approval of `etx:status/0'.
             spawn_op(Second, fun() -> etx_dst_client:alone_first(Tab, First) end, S);
@@ -341,6 +395,9 @@ execute(kill, _N, S = #{tab := Tab, alone := true, alone_order := [First, Second
         _ ->
             S
     end;
+execute(restart, _N, S = #{alone := true, idle := true}) ->
+    %% The two nodes start again at the end of the run.
+    S;
 execute(restart, _N, S = #{tab := Tab, alone := true, alone_order := [First, Second, _Third], alone_first := Pick}) ->
     Order =
         case Pick of
@@ -412,9 +469,63 @@ execute(heal, _N, S) ->
     ok = eta_net:heal_all(),
     S.
 
+execute_client(true, _R1, _R2, _N, _Tab, _Mode, S) ->
+    S;
+execute_client(false, R1, R2, N, Tab, Mode, S) ->
+    %% A client runs on a node that is not killed.
+    Node = pick(R1, running(S)),
+    bump(clients),
+    spawn_op(
+        Node,
+        fun() ->
+            %% The number of clients that run on the node.
+            _ = ets:update_counter(Tab, {active, Node}, 1, {{active, Node}, 0}),
+            try
+                client(Tab, N, R2, Mode)
+            after
+                ets:update_counter(Tab, {active, Node}, -1)
+            end
+        end,
+        S
+    ).
+
 %% After the last operation, the harness removes every cut, starts etx on
 %% the killed node, and stops the loss of messages. It then starts the
 %% last client of each node.
+repair(S0 = #{tab := Tab, idle := true, victim := Victim, rolling := Rolling, alone := Alone}) ->
+    ok = eta_net:heal_all(),
+    ok = eta_net:set_policy((eta_net:policy())#{drop_p => 0.0}),
+    Killed = [Node || {down, Node} <- ets:lookup(Tab, down)] ++ [Node || [Node] <- ets:match(Tab, {{alone_down, '$1'}, '_'})],
+    Down =
+        case Killed of
+            [] when not Rolling, not Alone ->
+                ok = etx_dst_client:kill(Tab, Victim),
+                [Victim];
+            _ ->
+                lists:usort(Killed)
+        end,
+    true = ets:delete(Tab, down),
+    [true = ets:delete(Tab, {alone_down, Node}) || Node <- Down],
+    %% The nodes whose last client waits for the times of convergence:
+    %% the killed nodes, and every node in a run with one node alone,
+    %% because the node that runs alone has no epoch.
+    Waiters =
+        case Alone of
+            true -> ?NODES;
+            false -> Down
+        end,
+    true = ets:insert(Tab, {idle, Waiters}),
+    bump(idle_starts, length(Down)),
+    _ = length(Down) =:= 2 andalso bump(idle_starts_with_one_node_alone),
+    Running = ?NODES -- Waiters,
+    %% Two killed nodes start one at a time, 2,000 ms apart.
+    S1 = lists:foldl(
+        fun({K, Node}, Acc) -> spawn_op(Node, fun() -> etx_dst_client:idle_node(Tab, Running, (K - 1) * 2000) end, Acc) end,
+        S0,
+        lists:enumerate(Down)
+    ),
+    S2 = lists:foldl(fun(Node, Acc) -> spawn_op(Node, fun() -> etx_dst_client:idle_check(Tab, Down) end, Acc) end, S1, ?NODES),
+    lists:foldl(fun(Node, Acc) -> spawn_op(Node, fun() -> final(Tab) end, Acc) end, S2, ?NODES);
 repair(S0 = #{tab := Tab}) ->
     ok = eta_net:heal_all(),
     ok = eta_net:set_policy((eta_net:policy())#{drop_p => 0.0}),
@@ -450,7 +561,15 @@ alone_kill(Tab, Step, Node) ->
 %% The last client waits for the table of the run, and for the start of
 %% etx on its node.
 final(Tab) ->
-    case {ets:lookup(Tab, ready), ets:member(Tab, {started, eta_net:local_node()})} of
+    %% In a run with the config `idle', the last client of a node that
+    %% was killed waits until every node has recorded its time of
+    %% convergence, so that the cluster has no commit before that.
+    Waits =
+        case ets:lookup(Tab, idle) of
+            [{idle, Down}] -> lists:member(eta_net:local_node(), Down) andalso length(ets:match(Tab, {{idle_converged, '_'}, '_'})) < length(?NODES);
+            [] -> false
+        end,
+    case {ets:lookup(Tab, ready), ets:member(Tab, {started, eta_net:local_node()}) andalso not Waits} of
         {[{ready, T}], true} ->
             etx_dst_client:final(Tab, T);
         _ ->
@@ -459,7 +578,7 @@ final(Tab) ->
     end.
 
 %% The operation of a client, with the planted defect of `Mode'.
-client(Tab, N, R, Mode) when Mode =:= correct; Mode =:= no_idempotency; Mode =:= no_copy; Mode =:= no_status; Mode =:= no_reset; Mode =:= alone_no_wait ->
+client(Tab, N, R, Mode) when Mode =:= correct; Mode =:= no_idempotency; Mode =:= no_copy; Mode =:= no_status; Mode =:= no_reset; Mode =:= alone_no_wait; Mode =:= no_epoch_end ->
     etx_dst_client:op(Tab, N, R);
 client(Tab, N, R, Mode) ->
     case {ets:lookup(Tab, ready), Mode, R rem 10} of
@@ -561,6 +680,14 @@ check_final(_Settled, #{tab := Tab, last_op := Last}) when is_integer(Last) ->
             Notes = ets:match(Tab, {{note, '$1'}, '$2'}),
             first_violation([
                 fun() ->
+                    %% `idle_convergence'. See "A start on a cluster
+                    %% without commits".
+                    case [{Node, Ms} || [Node, Ms] <- lists:sort(ets:match(Tab, {{idle_converged, '$1'}, '$2'})), Ms > ?IDLE_BOUND_MS] of
+                        [] -> ok;
+                        Slow -> violation(idle_convergence, #{slow => Slow, bound_ms => ?IDLE_BOUND_MS})
+                    end
+                end,
+                fun() ->
                     case [{Node, Rows} || {Node, [{_, Rows, _Start}]} <- Finals, lists:sum([V || {{acct, _}, V} <- Rows]) =/= Total] of
                         [] -> ok;
                         [{Node, Rows} | _] -> violation(conservation, #{node => Node, rows => Rows, final => true})
@@ -576,7 +703,7 @@ check_final(_Settled, #{tab := Tab, last_op := Last}) when is_integer(Last) ->
                 end
             ]);
         Missing ->
-            violation(final, #{no_answer => Missing, counted => [Node || Node <- ?NODES, ets:member(Tab, {count, {final, Node}})], ready => ets:member(Tab, ready), nodes => [{Node, node_state(Node)} || Node <- ?NODES]})
+            violation(final, #{idle => lists:sort(ets:match(Tab, {{idle_converged, '$1'}, '$2'})) ++ lists:sort(ets:match(Tab, {{idle_stage, '$1'}, '$2'})), no_answer => Missing, counted => [Node || Node <- ?NODES, ets:member(Tab, {count, {final, Node}})], ready => ets:member(Tab, ready), nodes => [{Node, node_state(Node)} || Node <- ?NODES]})
     end;
 check_final(_Settled, _State) ->
     ok.
@@ -632,6 +759,18 @@ bump(Key, N) ->
     end,
     ok.
 
+%% Keeps the highest value of a statistic.
+highest(Key, Value) ->
+    case ets:whereis(?STATS) of
+        undefined ->
+            ok;
+        _ ->
+            case ets:lookup(?STATS, Key) of
+                [{Key, Old}] when Old >= Value -> ok;
+                _ -> true = ets:insert(?STATS, {Key, Value}), ok
+            end
+    end.
+
 record_stats(Tab) ->
     bump(runs),
     Count = fun(Pattern) -> ets:select_count(Tab, [{Pattern, [], [true]}]) end,
@@ -655,6 +794,13 @@ record_stats(Tab) ->
             [{alone_step, Reached}] -> Reached;
             [] -> 0
         end,
+    %% The times of convergence of the runs with the config `idle', in
+    %% milliseconds of the virtual clock: their number, their sum and the
+    %% highest one.
+    Times = [Ms || [Ms] <- ets:match(Tab, {{idle_converged, '_'}, '$1'})],
+    bump(idle_checks, length(Times)),
+    bump(idle_ms, lists:sum(Times)),
+    _ = [highest(idle_ms_highest, lists:max(Times)) || Times =/= []],
     bump(runs_with_one_node_alone, length([x || Step >= 2])),
     bump(runs_with_both_nodes_started_again, length([x || Step >= 4])),
     %% The runs that killed two or three different nodes.

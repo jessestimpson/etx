@@ -207,7 +207,12 @@ init({Name, Options0}) ->
     %% ClusterController has it in the list of the StorageServers of the
     %% cluster. A StorageServer that starts without data copies the data
     %% from another StorageServer of that list, if one of them has data.
-    StorageOptions0 = #{coordinators => Coordinators, worker => process_name(Name, worker)},
+    %% `committed_at_epoch_end => false' plants a defect of the
+    %% StorageServer for the simulation.
+    StorageOptions0 = maps:merge(
+        #{coordinators => Coordinators, worker => process_name(Name, worker)},
+        maps:with([committed_at_epoch_end], Options)
+    ),
     StorageOptions =
         case maps:get(storage_copy, Options) of
             true -> StorageOptions0;

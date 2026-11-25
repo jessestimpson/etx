@@ -129,7 +129,7 @@ etx has no benchmark in this repository.
 | Level | What it checks | Command |
 |---|---|---|
 | Unit tests | 13 tests. Random functions on a table of etx and on an ETS table give the same results. Transactions from several processes lose no update. A cluster of three Erlang nodes | `make test` |
-| Simulation | 15 tests with about 600 seeds. Three nodes under the scheduler, the network and the disk of [eta](https://github.com/jessestimpson/eta), with kills and restarts of nodes and partitions. 7 invariants and 7 planted defects | `make dst` |
+| Simulation | 18 tests with about 800 seeds. Three nodes under the scheduler, the network and the disk of [eta](https://github.com/jessestimpson/eta), with kills and restarts of nodes and partitions. 8 invariants and 8 planted defects | `make dst` |
 
 The verification of etx depends on the verification of
 [redwall](https://github.com/jessestimpson/redwall):

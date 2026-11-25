@@ -4,7 +4,7 @@
 
 -include("etx_eta.hrl").
 
--export([node/1, setup/1, op/3, final/2, kill/2, kill_if_safe/2, alone_first/2, alone_second/3]).
+-export([node/1, setup/1, op/3, final/2, kill/2, kill_if_safe/2, alone_first/2, alone_second/3, idle_node/3, idle_check/2]).
 -export([accounts/0, total/0]).
 
 %% The 4 accounts and their sum.
@@ -53,6 +53,60 @@ kill_if_safe(Tab, Victim) ->
             _ = ets:update_counter(Tab, kills_refused_by_status, 1, {kills_refused_by_status, 0}),
             ok
     end.
+
+%% Starts etx on a killed node at the end of a run with the config
+%% `idle'. See "A start on a cluster without commits" in `etx_dst'. The
+%% process waits until the last clients of the nodes `Running' have
+%% ended, for at most 3,000 ms, and then for 1,000 ms and `Extra' more.
+idle_node(Tab, Running, Extra) ->
+    ok = idle_wait(Tab, Running, erlang:monotonic_time(millisecond) + 3000),
+    ok = timer:sleep(1000 + Extra),
+    true = ets:insert(Tab, {{idle_started, node()}, erlang:monotonic_time(millisecond)}),
+    ?MODULE:node(Tab).
+
+idle_wait(Tab, Running, Deadline) ->
+    Ended = lists:all(fun(Node) -> ets:member(Tab, {final, Node}) end, Running),
+    case Ended orelse erlang:monotonic_time(millisecond) >= Deadline of
+        true ->
+            ok;
+        false ->
+            ok = timer:sleep(50),
+            idle_wait(Tab, Running, Deadline)
+    end.
+
+%% The checks of a node after the start of the killed nodes `Down', at
+%% the end of a run with the config `idle'. No step commits. The process
+%% records the row `idle_converged' with the time since the start of the
+%% last killed node, in milliseconds of the virtual clock.
+idle_check(Tab, Down) ->
+    Started = [Time || Node <- Down, {_, Time} <- ets:lookup(Tab, {idle_started, Node})],
+    case length(Started) =:= length(Down) andalso ets:member(Tab, {started, node()}) of
+        true ->
+            Node = node(),
+            true = ets:insert(Tab, {{idle_stage, Node}, status}),
+            ok = await_current(Node),
+            %% A read through the StorageServer of this node only, from
+            %% its ETS tables.
+            true = ets:insert(Tab, {{idle_stage, Node}, local_read}),
+            ok = idle_read(etx_cluster:storage(default), true),
+            %% A read through the StorageServers by message only.
+            true = ets:insert(Tab, {{idle_stage, Node}, message_read}),
+            ok = idle_read(fun() -> etx_cluster:storages(default) end, false),
+            true = ets:delete(Tab, {idle_stage, Node}),
+            true = ets:insert(Tab, {{idle_converged, Node}, erlang:monotonic_time(millisecond) - lists:max([0 | Started])}),
+            ok;
+        false ->
+            ok = timer:sleep(50),
+            idle_check(Tab, Down)
+    end.
+
+%% Reads the first object of the database in a transaction without a
+%% mutation.
+idle_read(Storage, Direct) ->
+    {redwall_database, Servers} = etx_cluster:db(default),
+    Db = {redwall_database, Servers#{storage => Storage, direct => Direct}},
+    [_ | _] = redwall:transactional(Db, fun(Tx) -> redwall:get_range(redwall:snapshot(Tx), [], <<>>, [{limit, 1}]) end),
+    ok.
 
 %% The first kill of a run with one node alone. See "One node alone" in
 %% `etx_dst'. The process asks `etx:status/0', as `kill_if_safe/2' does,

@@ -3,7 +3,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--export([opts/2, calm/1, run/1, alone/2]).
+-export([opts/2, calm/1, run/1, alone/2, idle/1, alone_idle/1]).
 
 %% The limit for one test, in seconds.
 -define(TIMEOUT, 900).
@@ -237,6 +237,59 @@ alone_no_wait_is_found_test_() ->
         ?assert(lists:member(maps:get(property, Violation), [conservation, durable, final]), Violation),
         ?assertEqual(ok, maps:get(outcome, run(alone(Seed, #{}))), {seed, Seed})
     end}.
+
+%% Runs whose end has a start of a node on a cluster without commits. See
+%% "A start on a cluster without commits" in `etx_dst'. 100 seeds with the
+%% kills, restarts and partitions of the runs with faults.
+idle_test_() ->
+    {timeout, ?TIMEOUT, fun() ->
+        ok = etx_dst:reset_stats(),
+        sweep(lists:seq(1, 100), fun(Seed) -> idle(Seed) end),
+        Stats = etx_dst:stats(),
+        ?debugFmt("idle: ~p", [Stats]),
+        ok = write_stats({idle, 1}, Stats),
+        ?assertEqual(100, maps:get(idle_starts, Stats, 0), Stats),
+        ?assertEqual(300, maps:get(idle_checks, Stats, 0), Stats)
+    end}.
+
+%% The same end for the runs with one node alone: no client starts after
+%% the second kill, and the two killed nodes start at the end of the run,
+%% one at a time. 60 seeds.
+alone_idle_test_() ->
+    {timeout, ?TIMEOUT, fun() ->
+        ok = etx_dst:reset_stats(),
+        sweep(lists:seq(1, 60), fun(Seed) -> alone_idle(Seed) end),
+        Stats = etx_dst:stats(),
+        ?debugFmt("alone idle: ~p", [Stats]),
+        ok = write_stats({alone_idle, 1}, Stats),
+        ?assert(maps:get(idle_starts_with_one_node_alone, Stats, 0) > 20, Stats),
+        ?assertEqual(180, maps:get(idle_checks, Stats, 0), Stats)
+    end}.
+
+alone_idle(Seed) ->
+    alone_idle(Seed, #{}).
+
+alone_idle(Seed, Config) ->
+    alone(Seed, Config#{idle => true}).
+
+%% A planted defect: a StorageServer does not treat the end version of an
+%% ended epoch as committed. The epoch between the two kills has no
+%% commit, so the StorageServer that runs alone offers a copy at a
+%% version of the first epoch. When no LogServer of that epoch runs, the
+%% StorageServers of the nodes that start again stay behind. This is the
+%% defect of redwall that a run with three Erlang nodes found on
+%% 2026-11-24. The same seed passes without the defect.
+no_epoch_end_is_found_test_() ->
+    {timeout, ?TIMEOUT, fun() ->
+        {Seed, Violation} = first_violation(lists:seq(1, 60), fun(Seed) -> alone_idle(Seed, #{mode => no_epoch_end}) end),
+        ?debugFmt("no_epoch_end: seed ~p, ~p", [Seed, Violation]),
+        ?assertMatch(#{property := final}, Violation),
+        ?assertEqual(ok, maps:get(outcome, run(alone_idle(Seed))), {seed, Seed})
+    end}.
+
+idle(Seed) ->
+    Opts = #{config := Config} = opts(Seed, #{idle => true}),
+    Opts#{config := Config, settle_steps => 1000000, max_steps => 3000000}.
 
 %% Runs with a stop and a start of every node at the operation 30, and
 %% with the kills, restarts and partitions of the other runs before and

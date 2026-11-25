@@ -3,7 +3,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--export([opts/2, calm/1, run/1]).
+-export([opts/2, calm/1, run/1, alone/2]).
 
 %% The limit for one test, in seconds.
 -define(TIMEOUT, 900).
@@ -195,6 +195,47 @@ no_status_is_found_test_() ->
         %% does not answer.
         ?assert(lists:member(maps:get(property, Violation), [conservation, durable, final]), Violation),
         ?assertEqual(ok, maps:get(outcome, run(rolling(Seed, #{}))), {seed, Seed})
+    end}.
+
+%% The options of a run that stops two of the three nodes, one at a
+%% time, and starts them again, one at a time. See "One node alone" in
+%% `etx_dst'. The run has 500 operations. After the kill of the node with
+%% the leader of the coordinators, the coordinated state has no answer
+%% until the election time limit of peace has passed on the virtual
+%% clock, and the virtual clock advances only when no process can run.
+alone(Seed, Config) ->
+    Opts = #{config := Config1} = opts(Seed, Config#{alone => true}),
+    %% The clients that started while one node ran alone end after the
+    %% start of the other nodes, so the last clients need more steps.
+    Opts#{config := Config1#{last_op => 500}, max_ops => 500, max_steps => 5000000, settle_steps => 400000}.
+
+%% Runs with one node alone. 60 seeds. The tables are not lost: the last
+%% client of each node reads the accounts and every earlier write. In
+%% about half of the runs the second node is not killed, because the
+%% cluster has no new epoch before the end of the operations.
+alone_test_() ->
+    {timeout, ?TIMEOUT, fun() ->
+        ok = etx_dst:reset_stats(),
+        sweep(lists:seq(1, 60), fun(Seed) -> alone(Seed, #{}) end),
+        Stats = etx_dst:stats(),
+        ?debugFmt("alone: ~p", [Stats]),
+        ok = write_stats({alone, 1}, Stats),
+        ?assert(maps:get(runs_with_one_node_alone, Stats, 0) > 20, Stats),
+        ?assert(maps:get(runs_with_both_nodes_started_again, Stats, 0) > 20, Stats),
+        ?assert(maps:get(transfers, Stats, 0) > 3000, Stats)
+    end}.
+
+%% A planted defect: the second node is killed without a question to
+%% `etx:status/0', so it can stop before the cluster has recovered from
+%% the stop of the first node. The cluster then loses 2 LogServers of
+%% one epoch and resets the database. The same seed passes with the
+%% question.
+alone_no_wait_is_found_test_() ->
+    {timeout, ?TIMEOUT, fun() ->
+        {Seed, Violation} = first_violation(lists:seq(1, 100), fun(Seed) -> alone(Seed, #{mode => alone_no_wait}) end),
+        ?debugFmt("alone_no_wait: seed ~p, ~p", [Seed, Violation]),
+        ?assert(lists:member(maps:get(property, Violation), [conservation, durable, final]), Violation),
+        ?assertEqual(ok, maps:get(outcome, run(alone(Seed, #{}))), {seed, Seed})
     end}.
 
 %% Runs with a stop and a start of every node at the operation 30, and

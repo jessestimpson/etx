@@ -68,6 +68,39 @@
 %% starts again copies the data from the StorageServer of another node,
 %% so it does not need the records of the LogServers that are lost.
 %%
+%% == One node alone ==
+%%
+%% With the config `alone => true', a run stops two of the three nodes, one
+%% at a time, and starts them again, one at a time:
+%%
+%% <ol>
+%% <li>A process on another node asks `etx:status/0', and the harness
+%%   kills the first node if the cluster is healthy and the node is in
+%%   `safe_to_stop'.</li>
+%% <li>A process on the third node asks `etx:status/0'. The harness kills
+%%   the second node if the cluster has a later epoch than at the first
+%%   kill, every LogServer of that epoch runs, and the StorageServers of
+%%   the two nodes that run are current. The status does not list the
+%%   second node as safe to stop, because the cluster is not available
+%%   with one node.</li>
+%% <li>The third node runs alone. It has 1 of 3 coordinators, so the
+%%   cluster has no epoch, and a client on that node waits. The node has
+%%   the data in its StorageServer and in its LogServer of the last
+%%   epoch.</li>
+%% <li>A `restart' operation starts one of the two killed nodes, and the
+%%   next `restart' operation starts the other. The seed selects the
+%%   order.</li>
+%% </ol>
+%%
+%% The recovery after step 4 finds 1 of the 2 LogServers of the last epoch
+%% lost, which is below the replication degree of 2, so it does not reset
+%% the database. `check_final/2' checks that the last client of each node
+%% reads the accounts and every earlier write.
+%%
+%% The planted defect `alone_no_wait': the harness kills the second node
+%% without the question of step 2. The cluster can then lose 2 LogServers
+%% of one epoch.
+%%
 %% == Invariants ==
 %%
 %% The harness checks these invariants after every step:
@@ -97,8 +130,9 @@
 %%
 %% <ul>
 %% <li>`final' - the last client of each of the three nodes has ended: its
-%%   count and its read of every object. This is a check of availability
-%%   after the faults.</li>
+%%   count and its read of every object, and `etx:status/0' has reported
+%%   the StorageServer of its node as current. This is a check of
+%%   availability after the faults.</li>
 %% <li>`conservation' - the read of each last client has the sum of the
 %%   accounts at the start.</li>
 %% <li>`durable' - the read of each last client has every object of a
@@ -189,6 +223,13 @@ init(Seed, Config) ->
         faults => maps:get(faults, Config, true),
         %% Whether the run kills another node after each restart.
         rolling => maps:get(rolling, Config, false),
+        %% Whether the run stops two nodes, one at a time. See "One node
+        %% alone". The first two nodes of `alone_order' are the nodes
+        %% that the run kills, in the order of the kills. `alone_first'
+        %% is the node that starts again first.
+        alone => maps:get(alone, Config, false),
+        alone_order => lists:nth(Seed rem 6 + 1, [[A, B, C] || A <- ?NODES, B <- ?NODES, C <- ?NODES, A =/= B, B =/= C, A =/= C]),
+        alone_first => Seed div 6 rem 2 + 1,
         %% The number of the operation that stops every node and starts
         %% every node again, or `undefined'.
         restart_at => maps:get(restart_at, Config, undefined),
@@ -204,7 +245,10 @@ processes(#{ops := Ops}) ->
 
 generate(#{n := 0}, Rand) ->
     {boot, Rand};
-generate(#{faults := Faults, rolling := Rolling}, Rand0) ->
+generate(#{faults := Faults, rolling := Rolling0, alone := Alone}, Rand0) ->
+    %% A run with one node alone has the operations of a run with the
+    %% config `rolling'.
+    Rolling = Rolling0 orelse Alone,
     {Roll, Rand1} = rand:uniform_s(Rand0),
     {R1, Rand2} = rand:uniform_s(1000, Rand1),
     {R2, Rand3} = rand:uniform_s(100000, Rand2),
@@ -234,6 +278,13 @@ execute(Op, S0 = #{n := N0, tab := Tab}) ->
         case {ets:take(Tab, kill_approved), ets:member(Tab, down)} of
             {[{kill_approved, Victim}], false} -> etx_dst_client:kill(Tab, Victim);
             _ -> ok
+        end,
+    %% The kills of a run with one node alone, which a process of the run
+    %% has approved.
+    _ =
+        case ets:take(Tab, alone_approved) of
+            [{alone_approved, Step, Node}] -> alone_kill(Tab, Step, Node);
+            [] -> ok
         end,
     N = N0 + 1,
     S1 =
@@ -276,6 +327,36 @@ execute({client, R1, R2}, N, S = #{tab := Tab, mode := Mode}) ->
     Node = pick(R1, running(S)),
     bump(clients),
     spawn_op(Node, fun() -> client(Tab, N, R2, Mode) end, S);
+execute(kill, _N, S = #{tab := Tab, alone := true, alone_order := [First, Second, Third], mode := Mode}) ->
+    case {ets:member(Tab, ready), ets:lookup(Tab, alone_step)} of
+        {true, []} ->
+            %% The first kill, with the approval of `etx:status/0'.
+            spawn_op(Second, fun() -> etx_dst_client:alone_first(Tab, First) end, S);
+        {true, [{alone_step, 1}]} when Mode =:= alone_no_wait ->
+            %% The planted defect: the second kill without a question.
+            ok = alone_kill(Tab, 2, Second),
+            S;
+        {true, [{alone_step, 1}]} ->
+            spawn_op(Third, fun() -> etx_dst_client:alone_second(Tab, First, Second) end, S);
+        _ ->
+            S
+    end;
+execute(restart, _N, S = #{tab := Tab, alone := true, alone_order := [First, Second, _Third], alone_first := Pick}) ->
+    Order =
+        case Pick of
+            1 -> [First, Second];
+            2 -> [Second, First]
+        end,
+    case ets:lookup(Tab, alone_step) of
+        [{alone_step, Step}] when Step =:= 2; Step =:= 3 ->
+            Node = lists:nth(Step - 1, Order),
+            true = ets:delete(Tab, {alone_down, Node}),
+            true = ets:insert(Tab, {alone_step, Step + 1}),
+            bump(restarts),
+            start_node(Node, S);
+        _ ->
+            S
+    end;
 execute(kill, _N, S = #{tab := Tab, victim := Victim, rolling := Rolling}) ->
     case {ets:member(Tab, down), Rolling} of
         {true, _} ->
@@ -342,7 +423,29 @@ repair(S0 = #{tab := Tab}) ->
             [{down, Node}] -> start_node(Node, S0);
             [] -> S0
         end,
-    lists:foldl(fun(Node, Acc) -> spawn_op(Node, fun() -> final(Tab) end, Acc) end, S1, ?NODES).
+    %% The killed nodes of a run with one node alone.
+    S2 = lists:foldl(
+        fun([Node], Acc) ->
+            true = ets:delete(Tab, {alone_down, Node}),
+            start_node(Node, Acc)
+        end,
+        S1,
+        lists:sort(ets:match(Tab, {{alone_down, '$1'}, '_'}))
+    ),
+    lists:foldl(fun(Node, Acc) -> spawn_op(Node, fun() -> final(Tab) end, Acc) end, S2, ?NODES).
+
+%% Kills a node in a run with one node alone. `Step' is 1 for the first
+%% kill and 2 for the second.
+alone_kill(Tab, Step, Node) ->
+    case ets:lookup(Tab, alone_step) of
+        Rows when Step =:= 1, Rows =:= []; Step =:= 2, Rows =:= [{alone_step, 1}] ->
+            true = ets:insert(Tab, [{alone_step, Step}, {{alone_down, Node}, true}, {{killed, Node}, true}]),
+            true = ets:delete(Tab, {started, Node}),
+            _ = ets:update_counter(Tab, kills, 1, {kills, 0}),
+            ok = eta_net:kill_node(Node);
+        _OtherStep ->
+            ok
+    end.
 
 %% The last client waits for the table of the run, and for the start of
 %% etx on its node.
@@ -356,7 +459,7 @@ final(Tab) ->
     end.
 
 %% The operation of a client, with the planted defect of `Mode'.
-client(Tab, N, R, Mode) when Mode =:= correct; Mode =:= no_idempotency; Mode =:= no_copy; Mode =:= no_status; Mode =:= no_reset ->
+client(Tab, N, R, Mode) when Mode =:= correct; Mode =:= no_idempotency; Mode =:= no_copy; Mode =:= no_status; Mode =:= no_reset; Mode =:= alone_no_wait ->
     etx_dst_client:op(Tab, N, R);
 client(Tab, N, R, Mode) ->
     case {ets:lookup(Tab, ready), Mode, R rem 10} of
@@ -545,6 +648,15 @@ record_stats(Tab) ->
         bump(Counter, case ets:lookup(Tab, Counter) of [{Counter, Value}] -> Value; [] -> 0 end)
      || Counter <- [kills, kills_refused_by_status]
     ],
+    %% The runs in which one node ran alone, and the runs in which the
+    %% two killed nodes started again before the end of the operations.
+    Step =
+        case ets:lookup(Tab, alone_step) of
+            [{alone_step, Reached}] -> Reached;
+            [] -> 0
+        end,
+    bump(runs_with_one_node_alone, length([x || Step >= 2])),
+    bump(runs_with_both_nodes_started_again, length([x || Step >= 4])),
     %% The runs that killed two or three different nodes.
     bump(runs_with_kills_of_several_nodes, length([x || Count({{killed, '_'}, '_'}) > 1])),
     ok.
@@ -581,9 +693,10 @@ start_node(Node, S = #{tab := Tab}) ->
 
 %% The nodes that are not killed.
 running(#{tab := Tab}) ->
+    Alone = [Node || [Node] <- ets:match(Tab, {{alone_down, '$1'}, '_'})],
     case ets:lookup(Tab, down) of
-        [{down, Node}] -> ?NODES -- [Node];
-        [] -> ?NODES
+        [{down, Node}] -> (?NODES -- [Node]) -- Alone;
+        [] -> ?NODES -- Alone
     end.
 
 spawn_op(Node, Fun, S = #{ops := Ops}) ->

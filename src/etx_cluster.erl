@@ -89,7 +89,7 @@
 
 -export([start_link/2, db/1, names/0, options/2, status/1]).
 -export([init/1]).
--export([start_former/2, form/2, start_storage/2, proxy/1, storage/1]).
+-export([start_former/2, form/2, start_storage/2, proxy/1, storage/1, storages/1]).
 
 -export_type([name/0, options/0]).
 
@@ -219,7 +219,7 @@ init({Name, Options0}) ->
         {{cluster, Name},
             redwall:open(#{
                 proxy => fun() -> ?MODULE:proxy(Name) end,
-                storage => fun() -> ?MODULE:storage(Name) end,
+                storage => fun() -> ?MODULE:storages(Name) end,
                 %% A transaction whose commit has no answer is not applied
                 %% a second time.
                 automatic_idempotency => maps:get(automatic_idempotency, Options),
@@ -283,6 +283,24 @@ storage(Name) ->
     case ets:lookup(etx_registry, {storage, Name}) of
         [{_, Pid}] -> Pid;
         [] -> redwall_worker:storages(process_name(Name, worker))
+    end.
+
+%% @private
+%% The StorageServers of a database: the StorageServer of this node, and
+%% after it the StorageServers of the other nodes. A read uses the ETS
+%% tables of the StorageServer of this node. When that StorageServer has
+%% not applied the read version, for example after its start, the read
+%% goes to the StorageServers by message.
+storages(Name) ->
+    Others =
+        case redwall_worker:storages(process_name(Name, worker)) of
+            undefined -> [];
+            List -> List
+        end,
+    case ets:lookup(etx_registry, {storage, Name}) of
+        [{_, Pid}] -> [Pid | Others -- [Pid]];
+        [] when Others =:= [] -> undefined;
+        [] -> Others
     end.
 
 process_name(Name, Role) ->

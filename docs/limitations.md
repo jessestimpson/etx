@@ -9,6 +9,14 @@
   `etx:status/0` reports when the next node can stop. See [status.md](status.md).
 - `etx:status/0` reports the stop of nodes. It does not examine
   partitions, and its result is not the state of one moment.
+- With one of three nodes, a cluster has no epoch, and a function waits.
+  The tables are kept if that node runs until another node has started
+  again, and if the second node stopped after the cluster had a new
+  epoch. `etx:status/0` does not list the second node in `safe_to_stop`.
+- A read on a node whose StorageServer has not applied the read
+  version, for example while the StorageServer copies after its start,
+  waits for that StorageServer for one third of 5 seconds with three
+  nodes, and then goes to the StorageServer of another node.
 - The data of a table is in memory. A LogServer and a StorageServer of
   redwall have no disk. The data does not survive the stop of every node
   of the cluster.

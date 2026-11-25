@@ -4,7 +4,7 @@
 
 -include("etx_eta.hrl").
 
--export([node/1, setup/1, op/3, final/2, kill/2, kill_if_safe/2]).
+-export([node/1, setup/1, op/3, final/2, kill/2, kill_if_safe/2, alone_first/2, alone_second/3]).
 -export([accounts/0, total/0]).
 
 %% The 4 accounts and their sum.
@@ -53,6 +53,42 @@ kill_if_safe(Tab, Victim) ->
             _ = ets:update_counter(Tab, kills_refused_by_status, 1, {kills_refused_by_status, 0}),
             ok
     end.
+
+%% The first kill of a run with one node alone. See "One node alone" in
+%% `etx_dst'. The process asks `etx:status/0', as `kill_if_safe/2' does,
+%% and records the epoch of the cluster.
+alone_first(Tab, Victim) ->
+    case etx:status() of
+        #{healthy := true, epoch := Epoch, fault_tolerance := #{safe_to_stop := Nodes}} ->
+            case lists:member(Victim, Nodes) of
+                true -> true = ets:insert(Tab, [{alone_epoch, Epoch}, {alone_approved, 1, Victim}]);
+                false -> true
+            end;
+        _NotHealthy ->
+            true
+    end,
+    ok.
+
+%% The second kill of a run with one node alone. `Down' is the node of
+%% the first kill. The process approves the kill of `Victim' if the
+%% cluster has a later epoch than at the first kill, every LogServer of
+%% that epoch runs, no LogServer of it is on the node `Down', and the
+%% StorageServers of the two nodes that run are current. The cluster has
+%% then recovered from the first kill.
+alone_second(Tab, Down, Victim) ->
+    [{alone_epoch, Before}] = ets:lookup(Tab, alone_epoch),
+    case etx:status() of
+        #{
+            epoch := Epoch,
+            logs := #{total := Logs, up := Logs},
+            storages := #{up := 2, current := 2},
+            nodes := #{Down := #{logs := 0}}
+        } when is_integer(Epoch), Epoch > Before, Logs >= 2 ->
+            true = ets:insert(Tab, {alone_approved, 2, Victim});
+        _NotRecovered ->
+            _ = ets:update_counter(Tab, kills_refused_by_status, 1, {kills_refused_by_status, 0})
+    end,
+    ok.
 
 %% Creates the table of the run with the 4 accounts and the counter, and
 %% records the row `ready'.
@@ -171,4 +207,20 @@ final(Tab, T) ->
     %% such a write ends.
     true = etx:insert(T, {{final_note, Node}, Value}),
     ReadStart = ets:update_counter(Tab, stamp, 1, {stamp, 0}),
-    true = ets:insert(Tab, {{final, Node}, etx:tab2list(T), ReadStart}).
+    Rows = etx:tab2list(T),
+    %% A read on a node whose StorageServer is behind goes to the
+    %% StorageServer of another node, so the read above does not show
+    %% that the StorageServer of this node has the data. The last client
+    %% therefore also waits until `etx:status/0' reports the
+    %% StorageServer of this node as current.
+    ok = await_current(Node),
+    true = ets:insert(Tab, {{final, Node}, Rows, ReadStart}).
+
+await_current(Node) ->
+    case etx:status() of
+        #{nodes := #{Node := #{storage := #{current := true}}}} ->
+            ok;
+        _NotCurrent ->
+            ok = timer:sleep(100),
+            await_current(Node)
+    end.

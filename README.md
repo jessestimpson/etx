@@ -15,8 +15,9 @@ interface of `ets` for a table that every node of a cluster shares.
   [redwall](https://github.com/jessestimpson/redwall), an implementation
   of the transaction system of FoundationDB in Erlang.
 
-etx is experimental. The data of a table is in memory, and does not
-survive the stop of every node of the cluster. See "Limitations".
+etx is experimental. etx uses the storage engine `ets` of redwall. With
+this engine, the data of a table is in memory, and does not survive the
+stop of every node of the cluster. See "Limitations".
 
 ## Example
 
@@ -154,8 +155,10 @@ request. See [docs/verification.md](docs/verification.md).
 
 The most important limitations are:
 
-- The data of a table is in memory. After the stop of every node of a
-  cluster, the cluster starts again without its tables.
+- etx uses the storage engine `ets` of redwall, which keeps the data of
+  a table in memory. After the stop of every node of a cluster, the
+  cluster starts again without its tables. etx has no option for another
+  storage engine.
 - The nodes of a cluster can be restarted one after another without the
   loss of the tables only with a wait between two restarts.
   `etx:status/0` reports when the next node can stop.

@@ -17,9 +17,11 @@
   version, for example while the StorageServer copies after its start,
   waits for that StorageServer for one third of 5 seconds with three
   nodes, and then goes to the StorageServer of another node.
-- The data of a table is in memory. A LogServer and a StorageServer of
-  redwall have no disk. The data does not survive the stop of every node
-  of the cluster.
+- etx uses the storage engine `ets` of redwall, and has no option for
+  another storage engine. With this engine, the data of a table is in
+  memory: a LogServer and a StorageServer of redwall have no disk. The
+  data does not survive the stop of every node of the cluster. The two
+  items below hold for this engine.
 - After the stop of every node of a cluster, the cluster starts again
   without its tables. The coordinators keep the coordinated state on
   disk, so the nodes form the same cluster, and the recovery resets the

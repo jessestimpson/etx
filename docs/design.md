@@ -33,8 +33,8 @@ environment.
 - A match spec is evaluated in the StorageServer of redwall
   (`redwall:select/5`), so an object that does not match does not leave
   the StorageServer.
-- Each node of a cluster has a StorageServer with every object in ETS
-  tables in memory. A read uses these tables in the process of the
+- Each node of a cluster has a StorageServer with the storage engine
+  `ets` of redwall: every object is in ETS tables in memory. A read uses these tables in the process of the
   caller.
 
 ## Processes of a cluster

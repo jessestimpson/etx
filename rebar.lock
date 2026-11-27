@@ -1,8 +1,8 @@
 [{<<"peace">>,
   {git,"https://github.com/jessestimpson/peace.git",
-       {ref,"27f4e26c4d8b7f801e544637c3b552ef6d1de636"}},
+       {ref,"1216715006c09f6dbc692f59c7e7414c7b6a2528"}},
   0},
  {<<"redwall">>,
   {git,"https://github.com/jessestimpson/redwall.git",
-       {ref,"fbe01ba16c069960fb0b195a8e834cf0271e3c8d"}},
+       {ref,"e65ef2f5f1ed0fc20a6a44b091e8bca0ec277b09"}},
   0}].
